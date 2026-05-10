@@ -2,118 +2,131 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <thread>
 #include <vector>
 
 namespace {
 
-std::vector<int> MakeIdx(int n) {
-  std::vector<int> v(n);
+void ParallelFor(int count, const std::function<void(int)> &func) {
+  unsigned int threads_count = std::thread::hardware_concurrency();
 
-  for (int i = 0; i < n; ++i) {
-    v[i] = i;
+  if (threads_count == 0) {
+    threads_count = 4;
   }
 
-  return v;
+  threads_count = std::min<unsigned int>(threads_count, static_cast<unsigned int>(count));
+
+  std::vector<std::thread> threads(threads_count);
+
+  int block_size = count / static_cast<int>(threads_count);
+  int remainder = count % static_cast<int>(threads_count);
+
+  int begin = 0;
+
+  for (unsigned int t = 0; t < threads_count; ++t) {
+    int end = begin + block_size + (t < static_cast<unsigned int>(remainder) ? 1 : 0);
+
+    threads[t] = std::thread([begin, end, &func]() {
+      for (int i = begin; i < end; ++i) {
+        func(i);
+      }
+    });
+
+    begin = end;
+  }
+
+  for (auto &th : threads) {
+    th.join();
+  }
 }
 
 void MulBlock(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, int bs) {
   for (int i = 0; i < bs; ++i) {
     for (int k = 0; k < bs; ++k) {
-      double v = a[i * bs + k];
+      double v = a[(i * bs) + k];
 
       for (int j = 0; j < bs; ++j) {
-        c[i * bs + j] += v * b[k * bs + j];
+        c[i * bs + j] += v * b[(k * bs) + j];
       }
     }
   }
 }
 
 void RegularMultiplication(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, int n) {
-  auto idx = MakeIdx(n);
-
-  std::for_each(idx.begin(), idx.end(), [&](int i) {
+  ParallelFor(n, [&](int i) {
     for (int j = 0; j < n; ++j) {
       double s = 0.0;
 
       for (int k = 0; k < n; ++k) {
-        s += a[i * n + k] * b[k * n + j];
+        s += a[(i * n) + k] * b[(k * n) + j];
       }
 
-      c[i * n + j] = s;
+      c[(i * n) + j] = s;
     }
   });
 }
 
 void InitializeBlocks(const std::vector<double> &a, const std::vector<double> &b, std::vector<std::vector<double>> &ba,
                       std::vector<std::vector<double>> &bb, int g, int bs, int n) {
-  for (int i = 0; i < g; ++i) {
-    for (int j = 0; j < g; ++j) {
-      int id = i * g + j;
+  ParallelFor(g * g, [&](int id) {
+    int i = id / g;
+    int j = id % g;
 
-      ba[id].assign(bs * bs, 0.0);
-      bb[id].assign(bs * bs, 0.0);
+    ba[id].assign(bs * bs, 0.0);
+    bb[id].assign(bs * bs, 0.0);
 
-      for (int bi = 0; bi < bs; ++bi) {
-        for (int bj = 0; bj < bs; ++bj) {
-          int gi = i * bs + bi;
-          int gj = j * bs + bj;
-          int li = bi * bs + bj;
+    for (int bi = 0; bi < bs; ++bi) {
+      for (int bj = 0; bj < bs; ++bj) {
+        int gi = (i * bs) + bi;
+        int gj = (j * bs) + bj;
+        int li = (bi * bs) + bj;
 
-          ba[id][li] = a[gi * n + gj];
-          bb[id][li] = b[gi * n + gj];
-        }
+        ba[id][li] = a[(gi * n) + gj];
+        bb[id][li] = b[(gi * n) + gj];
       }
     }
-  }
+  });
 }
 
 void AlignBlocks(const std::vector<std::vector<double>> &ba, const std::vector<std::vector<double>> &bb,
                  std::vector<std::vector<double>> &aa, std::vector<std::vector<double>> &ab, int g) {
-  auto idx = MakeIdx(g * g);
-
-  std::for_each(idx.begin(), idx.end(), [&](int id) {
+  ParallelFor(g * g, [&](int id) {
     int i = id / g;
     int j = id % g;
 
-    aa[id] = ba[i * g + (j + i) % g];
-    ab[id] = bb[((i + j) % g) * g + j];
+    aa[id] = ba[(i * g) + ((j + i) % g)];
+    ab[id] = bb[(((i + j) % g) * g) + j];
   });
 }
 
 void CannonStep(std::vector<std::vector<double>> &a, std::vector<std::vector<double>> &b,
                 std::vector<std::vector<double>> &c, int g, int bs) {
-  auto idx = MakeIdx(g * g);
-
-  std::for_each(idx.begin(), idx.end(), [&](int id) { MulBlock(a[id], b[id], c[id], bs); });
+  ParallelFor(g * g, [&](int id) { MulBlock(a[id], b[id], c[id], bs); });
 }
 
 void Shift(std::vector<std::vector<double>> &a, std::vector<std::vector<double>> &b,
            std::vector<std::vector<double>> &na, std::vector<std::vector<double>> &nb, int g) {
-  auto idx = MakeIdx(g * g);
-
-  std::for_each(idx.begin(), idx.end(), [&](int id) {
+  ParallelFor(g * g, [&](int id) {
     int i = id / g;
     int j = id % g;
 
-    na[id] = a[i * g + (j + 1) % g];
-    nb[id] = b[((i + 1) % g) * g + j];
+    na[id] = a[(i * g) + ((j + 1) % g)];
+    nb[id] = b[(((i + 1) % g) * g) + j];
   });
 }
 
 void Assemble(const std::vector<std::vector<double>> &c, std::vector<double> &r, int g, int bs, int n) {
-  auto idx = MakeIdx(g * g);
-
-  std::for_each(idx.begin(), idx.end(), [&](int id) {
+  ParallelFor(g * g, [&](int id) {
     int i = id / g;
     int j = id % g;
 
     for (int bi = 0; bi < bs; ++bi) {
       for (int bj = 0; bj < bs; ++bj) {
-        int gi = i * bs + bi;
-        int gj = j * bs + bj;
+        int gi = (i * bs) + bi;
+        int gj = (j * bs) + bj;
 
-        r[gi * n + gj] = c[id][bi * bs + bj];
+        r[(gi * n) + gj] = c[id][(bi * bs) + bj];
       }
     }
   });
@@ -131,10 +144,11 @@ ZyazevaSMatrixMultCannonAlgSTL::ZyazevaSMatrixMultCannonAlgSTL(const InType &in)
 
 bool ZyazevaSMatrixMultCannonAlgSTL::ValidationImpl() {
   auto sz = std::get<0>(GetInput());
+
   auto &a = std::get<1>(GetInput());
   auto &b = std::get<2>(GetInput());
 
-  return sz > 0 && a.size() == sz * sz && b.size() == sz * sz;
+  return sz > 0 && a.size() == static_cast<size_t>(sz * sz) && b.size() == static_cast<size_t>(sz * sz);
 }
 
 bool ZyazevaSMatrixMultCannonAlgSTL::PreProcessingImpl() {
@@ -154,6 +168,7 @@ bool ZyazevaSMatrixMultCannonAlgSTL::RunImpl() {
 
   if (g <= 1 || g * g != n || n % g != 0) {
     RegularMultiplication(a, b, res, n);
+
     GetOutput() = res;
     return true;
   }
@@ -172,10 +187,10 @@ bool ZyazevaSMatrixMultCannonAlgSTL::RunImpl() {
 
   AlignBlocks(ba, bb, aa, ab, g);
 
-  for (int i = 0; i < g; ++i) {
+  for (int step = 0; step < g; ++step) {
     CannonStep(aa, ab, c, g, bs);
 
-    if (i < g - 1) {
+    if (step < g - 1) {
       std::vector<std::vector<double>> na(g * g);
       std::vector<std::vector<double>> nb(g * g);
 
