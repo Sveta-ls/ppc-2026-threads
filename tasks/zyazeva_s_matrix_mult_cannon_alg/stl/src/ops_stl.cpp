@@ -19,12 +19,12 @@ void ParallelFor(size_t count, const std::function<void(size_t)> &func) {
     threads_count = 4;
   }
 
-  threads_count = std::min<size_t>(threads_count, static_cast<size_t>(count));
+  threads_count = std::min<size_t>(threads_count, count);
 
   std::vector<std::thread> threads(threads_count);
 
-  size_t block_size = count / static_cast<size_t>(threads_count);
-  size_t remainder = count % static_cast<size_t>(threads_count);
+  size_t block_size = count / threads_count;
+  size_t remainder = count % threads_count;
 
   size_t begin = 0;
 
@@ -78,8 +78,8 @@ void InitializeBlocks(const std::vector<double> &a, const std::vector<double> &b
     size_t i = id / g;
     size_t j = id % g;
 
-    ba[id].assign(static_cast<size_t>(bs) * static_cast<size_t>(bs), 0.0);
-    bb[id].assign(static_cast<size_t>(bs) * static_cast<size_t>(bs), 0.0);
+    ba[id].assign(bs * bs, 0.0);
+    bb[id].assign(bs * bs, 0.0);
 
     for (size_t bi = 0; bi < bs; ++bi) {
       for (size_t bj = 0; bj < bs; ++bj) {
@@ -169,7 +169,7 @@ bool ZyazevaSMatrixMultCannonAlgSTL::RunImpl() {
 
   std::vector<double> res(n * n, 0.0);
 
-  size_t g = static_cast<size_t>(std::sqrt(n));
+  auto g = static_cast<size_t>(std::sqrt(n));
 
   if (g <= 1 || g * g != n || n % g != 0) {
     RegularMultiplication(a, b, res, n);
