@@ -27,11 +27,11 @@ void ParallelFor(int count, const std::function<void(size_t)> &func) {
 
   size_t begin = 0;
 
-  for (unsigned int th = 0; th < threads_count; ++th) {
-    size_t end = begin + block_size + (static_cast<int>(th) < remainder ? 1 : 0);
+  for (size_t th = 0; th < threads_count; ++th) {
+    size_t end = begin + block_size + (th < remainder ? 1 : 0);
 
     threads[th] = std::thread([begin, end, &func]() {
-      for (int i = begin; i < end; ++i) {
+      for (size_t i = begin; i < end; ++i) {
         func(i);
       }
     });
