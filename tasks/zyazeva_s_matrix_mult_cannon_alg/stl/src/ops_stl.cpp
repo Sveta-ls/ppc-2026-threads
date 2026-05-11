@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <functional>
 #include <thread>
 #include <utility>
@@ -11,19 +12,19 @@
 
 namespace {
 
-void ParallelFor(int count, const std::function<void(size_t)> &func) {
-  unsigned int threads_count = std::thread::hardware_concurrency();
+void ParallelFor(size_t count, const std::function<void(size_t)> &func) {
+  size_t threads_count = std::thread::hardware_concurrency();
 
   if (threads_count == 0) {
     threads_count = 4;
   }
 
-  threads_count = std::min<unsigned int>(threads_count, static_cast<unsigned int>(count));
+  threads_count = std::min<size_t>(threads_count, static_cast<size_t>(count));
 
   std::vector<std::thread> threads(threads_count);
 
-  size_t block_size = count / static_cast<int>(threads_count);
-  size_t remainder = count % static_cast<int>(threads_count);
+  size_t block_size = count / static_cast<size_t>(threads_count);
+  size_t remainder = count % static_cast<size_t>(threads_count);
 
   size_t begin = 0;
 
@@ -56,12 +57,12 @@ void MulBlock(const std::vector<double> &a, const std::vector<double> &b, std::v
   }
 }
 
-void RegularMultiplication(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, int n) {
-  ParallelFor(n, [&](int i) {
-    for (int j = 0; j < n; ++j) {
+void RegularMultiplication(const std::vector<double> &a, const std::vector<double> &b, std::vector<double> &c, size_t n) {
+  ParallelFor(n, [&](size_t i) {
+    for (size_t j = 0; j < n; ++j) {
       double s = 0.0;
 
-      for (int k = 0; k < n; ++k) {
+      for (size_t k = 0; k < n; ++k) {
         s += a[(i * n) + k] * b[(k * n) + j];
       }
 
@@ -71,19 +72,19 @@ void RegularMultiplication(const std::vector<double> &a, const std::vector<doubl
 }
 
 void InitializeBlocks(const std::vector<double> &a, const std::vector<double> &b, std::vector<std::vector<double>> &ba,
-                      std::vector<std::vector<double>> &bb, int g, int bs, int n) {
-  ParallelFor(g * g, [&](int id) {
-    int i = id / g;
-    int j = id % g;
+                      std::vector<std::vector<double>> &bb, size_t g, size_t bs, size_t n) {
+  ParallelFor(g * g, [&](size_t id) {
+    size_t i = id / g;
+    size_t j = id % g;
 
     ba[id].assign(static_cast<size_t>(bs) * static_cast<size_t>(bs), 0.0);
     bb[id].assign(static_cast<size_t>(bs) * static_cast<size_t>(bs), 0.0);
 
-    for (int bi = 0; bi < bs; ++bi) {
-      for (int bj = 0; bj < bs; ++bj) {
-        int gi = (i * bs) + bi;
-        int gj = (j * bs) + bj;
-        int li = (bi * bs) + bj;
+    for (size_t bi = 0; bi < bs; ++bi) {
+      for (size_t bj = 0; bj < bs; ++bj) {
+        size_t gi = (i * bs) + bi;
+        size_t gj = (j * bs) + bj;
+        size_t li = (bi * bs) + bj;
 
         ba[id][li] = a[(gi * n) + gj];
         bb[id][li] = b[(gi * n) + gj];
@@ -93,10 +94,10 @@ void InitializeBlocks(const std::vector<double> &a, const std::vector<double> &b
 }
 
 void AlignBlocks(const std::vector<std::vector<double>> &ba, const std::vector<std::vector<double>> &bb,
-                 std::vector<std::vector<double>> &aa, std::vector<std::vector<double>> &ab, int g) {
-  ParallelFor(g * g, [&](int id) {
-    int i = id / g;
-    int j = id % g;
+                 std::vector<std::vector<double>> &aa, std::vector<std::vector<double>> &ab, size_t g) {
+  ParallelFor(g * g, [&](size_t id) {
+    size_t i = id / g;
+    size_t j = id % g;
 
     aa[id] = ba[(i * g) + ((j + i) % g)];
     ab[id] = bb[(((i + j) % g) * g) + j];
@@ -104,30 +105,30 @@ void AlignBlocks(const std::vector<std::vector<double>> &ba, const std::vector<s
 }
 
 void CannonStep(std::vector<std::vector<double>> &a, std::vector<std::vector<double>> &b,
-                std::vector<std::vector<double>> &c, int g, int bs) {
-  ParallelFor(g * g, [&](int id) { MulBlock(a[id], b[id], c[id], bs); });
+                std::vector<std::vector<double>> &c, size_t g, size_t bs) {
+  ParallelFor(g * g, [&](size_t id) { MulBlock(a[id], b[id], c[id], bs); });
 }
 
 void Shift(std::vector<std::vector<double>> &a, std::vector<std::vector<double>> &b,
-           std::vector<std::vector<double>> &na, std::vector<std::vector<double>> &nb, int g) {
-  ParallelFor(g * g, [&](int id) {
-    int i = id / g;
-    int j = id % g;
+           std::vector<std::vector<double>> &na, std::vector<std::vector<double>> &nb, size_t g) {
+  ParallelFor(g * g, [&](size_t id) {
+    size_t i = id / g;
+    size_t j = id % g;
 
     na[id] = a[(i * g) + ((j + 1) % g)];
     nb[id] = b[(((i + 1) % g) * g) + j];
   });
 }
 
-void Assemble(const std::vector<std::vector<double>> &c, std::vector<double> &r, int g, int bs, int n) {
-  ParallelFor(g * g, [&](int id) {
-    int i = id / g;
-    int j = id % g;
+void Assemble(const std::vector<std::vector<double>> &c, std::vector<double> &r, size_t g, size_t bs, size_t n) {
+  ParallelFor(g * g, [&](size_t id) {
+    size_t i = id / g;
+    size_t j = id % g;
 
-    for (int bi = 0; bi < bs; ++bi) {
-      for (int bj = 0; bj < bs; ++bj) {
-        int gi = (i * bs) + bi;
-        int gj = (j * bs) + bj;
+    for (size_t bi = 0; bi < bs; ++bi) {
+      for (size_t bj = 0; bj < bs; ++bj) {
+        size_t gi = (i * bs) + bi;
+        size_t gj = (j * bs) + bj;
 
         r[(gi * n) + gj] = c[id][(bi * bs) + bj];
       }
@@ -167,7 +168,7 @@ bool ZyazevaSMatrixMultCannonAlgSTL::RunImpl() {
 
   std::vector<double> res(n * n, 0.0);
 
-  size_t g = static_cast<int>(std::sqrt(n));
+  size_t g = static_cast<size_t>(std::sqrt(n));
 
   if (g <= 1 || g * g != n || n % g != 0) {
     RegularMultiplication(a, b, res, n);
