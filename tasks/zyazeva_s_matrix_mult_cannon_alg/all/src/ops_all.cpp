@@ -176,6 +176,69 @@ void ZyazevaSMatrixMultCannonAlgALL::AssembleResult(const std::vector<std::vecto
   }
 }
 
+// Extracted from RunImpl to reduce cognitive complexity
+void ZyazevaSMatrixMultCannonAlgALL::DistributeBlocks(const std::vector<double> &m1, const std::vector<double> &m2,
+                                                      int grid, int block_size, int block_elems, int sz,
+                                                      std::vector<double> &local_a,
+                                                      std::vector<double> &local_b) const {
+  if (rank_ == 0) {
+    for (int proc = 0; proc < mpi_size_; ++proc) {
+      const int proc_row = proc / grid;
+      const int proc_col = proc % grid;
+
+      std::vector<double> tmp_a(block_elems);
+      std::vector<double> tmp_b(block_elems);
+
+      for (int i = 0; i < block_size; ++i) {
+        for (int j = 0; j < block_size; ++j) {
+          const int gi = (proc_row * block_size) + i;
+          const int gj = (proc_col * block_size) + j;
+          tmp_a[(i * block_size) + j] = m1[(gi * sz) + gj];
+          tmp_b[(i * block_size) + j] = m2[(gi * sz) + gj];
+        }
+      }
+
+      if (proc == 0) {
+        local_a = tmp_a;
+        local_b = tmp_b;
+      } else {
+        MPI_Send(tmp_a.data(), block_elems, MPI_DOUBLE, proc, 0, MPI_COMM_WORLD);
+        MPI_Send(tmp_b.data(), block_elems, MPI_DOUBLE, proc, 1, MPI_COMM_WORLD);
+      }
+    }
+  } else {
+    MPI_Recv(local_a.data(), block_elems, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(local_b.data(), block_elems, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  }
+}
+
+void ZyazevaSMatrixMultCannonAlgALL::CollectResult(const std::vector<double> &local_c, std::vector<double> &result,
+                                                   int grid, int block_size, int block_elems, int sz) const {
+  if (rank_ == 0) {
+    for (int proc = 0; proc < mpi_size_; ++proc) {
+      const int proc_row_p = proc / grid;
+      const int proc_col_p = proc % grid;
+
+      std::vector<double> block(block_elems);
+      if (proc == 0) {
+        block = local_c;
+      } else {
+        MPI_Recv(block.data(), block_elems, MPI_DOUBLE, proc, 30, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      }
+
+      for (int i = 0; i < block_size; ++i) {
+        for (int j = 0; j < block_size; ++j) {
+          const int gi = (proc_row_p * block_size) + i;
+          const int gj = (proc_col_p * block_size) + j;
+          result[(gi * sz) + gj] = block[(i * block_size) + j];
+        }
+      }
+    }
+  } else {
+    MPI_Send(local_c.data(), block_elems, MPI_DOUBLE, 0, 30, MPI_COMM_WORLD);
+  }
+}
+
 bool ZyazevaSMatrixMultCannonAlgALL::RunImpl() {
   int sz = 0;
 
@@ -185,7 +248,7 @@ bool ZyazevaSMatrixMultCannonAlgALL::RunImpl() {
 
   MPI_Bcast(&sz, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-  const size_t sz_t = static_cast<size_t>(sz);
+  const auto sz_t = static_cast<size_t>(sz);
   const size_t mat_size = sz_t * sz_t;
 
   std::vector<double> m1(mat_size);
@@ -197,87 +260,44 @@ bool ZyazevaSMatrixMultCannonAlgALL::RunImpl() {
   }
 
   MPI_Bcast(m1.data(), static_cast<int>(mat_size), MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
   MPI_Bcast(m2.data(), static_cast<int>(mat_size), MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
   std::vector<double> result(mat_size, 0.0);
 
-  int grid = static_cast<int>(std::sqrt(mpi_size_));
-
-  bool use_cannon = (grid * grid == mpi_size_) && (grid > 0) && (sz % grid == 0);
+  const int grid = static_cast<int>(std::sqrt(mpi_size_));
+  const bool use_cannon = (grid * grid == mpi_size_) && (grid > 0) && (sz % grid == 0);
 
   if (!use_cannon) {
     if (rank_ == 0) {
       RegularMultiplication(m1, m2, result, sz);
     }
-
     MPI_Bcast(result.data(), static_cast<int>(mat_size), MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
     GetOutput() = result;
-
     return true;
   }
 
-  int block_size = sz / grid;
-  int block_elems = block_size * block_size;
+  const int block_size = sz / grid;
+  const int block_elems = block_size * block_size;
 
   std::vector<double> local_a(block_elems);
   std::vector<double> local_b(block_elems);
   std::vector<double> local_c(block_elems, 0.0);
 
-  if (rank_ == 0) {
-    for (int p = 0; p < mpi_size_; ++p) {
-      int proc_row = p / grid;
-      int proc_col = p % grid;
+  DistributeBlocks(m1, m2, grid, block_size, block_elems, sz, local_a, local_b);
 
-      std::vector<double> tmp_a(block_elems);
-      std::vector<double> tmp_b(block_elems);
+  const int proc_row = rank_ / grid;
+  const int proc_col = rank_ % grid;
 
-      for (int i = 0; i < block_size; ++i) {
-        for (int j = 0; j < block_size; ++j) {
-          int gi = proc_row * block_size + i;
-          int gj = proc_col * block_size + j;
-
-          tmp_a[i * block_size + j] = m1[gi * sz + gj];
-
-          tmp_b[i * block_size + j] = m2[gi * sz + gj];
-        }
-      }
-
-      if (p == 0) {
-        local_a = tmp_a;
-        local_b = tmp_b;
-
-      } else {
-        MPI_Send(tmp_a.data(), block_elems, MPI_DOUBLE, p, 0, MPI_COMM_WORLD);
-
-        MPI_Send(tmp_b.data(), block_elems, MPI_DOUBLE, p, 1, MPI_COMM_WORLD);
-      }
-    }
-
-  } else {
-    MPI_Recv(local_a.data(), block_elems, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-    MPI_Recv(local_b.data(), block_elems, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  }
-
-  int proc_row = rank_ / grid;
-  int proc_col = rank_ % grid;
-
-  for (int s = 0; s < proc_row; ++s) {
-    int send_to = proc_row * grid + ((proc_col - 1 + grid) % grid);
-
-    int recv_from = proc_row * grid + ((proc_col + 1) % grid);
-
+  for (int sh = 0; sh < proc_row; ++sh) {
+    const int send_to = (proc_row * grid) + ((proc_col - 1 + grid) % grid);
+    const int recv_from = (proc_row * grid) + ((proc_col + 1) % grid);
     MPI_Sendrecv_replace(local_a.data(), block_elems, MPI_DOUBLE, send_to, 10, recv_from, 10, MPI_COMM_WORLD,
                          MPI_STATUS_IGNORE);
   }
 
-  for (int s = 0; s < proc_col; ++s) {
-    int send_to = ((proc_row - 1 + grid) % grid) * grid + proc_col;
-
-    int recv_from = ((proc_row + 1) % grid) * grid + proc_col;
-
+  for (int sh = 0; sh < proc_col; ++sh) {
+    const int send_to = (((proc_row - 1 + grid) % grid) * grid) + proc_col;
+    const int recv_from = (((proc_row + 1) % grid) * grid) + proc_col;
     MPI_Sendrecv_replace(local_b.data(), block_elems, MPI_DOUBLE, send_to, 11, recv_from, 11, MPI_COMM_WORLD,
                          MPI_STATUS_IGNORE);
   }
@@ -285,51 +305,20 @@ bool ZyazevaSMatrixMultCannonAlgALL::RunImpl() {
   for (int step = 0; step < grid; ++step) {
     MultiplyBlocks(local_a, local_b, local_c, block_size);
 
-    int left = proc_row * grid + ((proc_col - 1 + grid) % grid);
-
-    int right = proc_row * grid + ((proc_col + 1) % grid);
-
+    const int left = (proc_row * grid) + ((proc_col - 1 + grid) % grid);
+    const int right = (proc_row * grid) + ((proc_col + 1) % grid);
     MPI_Sendrecv_replace(local_a.data(), block_elems, MPI_DOUBLE, left, 20, right, 20, MPI_COMM_WORLD,
                          MPI_STATUS_IGNORE);
 
-    int up = ((proc_row - 1 + grid) % grid) * grid + proc_col;
-
-    int down = ((proc_row + 1) % grid) * grid + proc_col;
-
+    const int up = (((proc_row - 1 + grid) % grid) * grid) + proc_col;
+    const int down = (((proc_row + 1) % grid) * grid) + proc_col;
     MPI_Sendrecv_replace(local_b.data(), block_elems, MPI_DOUBLE, up, 21, down, 21, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
   }
 
-  if (rank_ == 0) {
-    for (int p = 0; p < mpi_size_; ++p) {
-      int proc_row_p = p / grid;
-      int proc_col_p = p % grid;
+  CollectResult(local_c, result, grid, block_size, block_elems, sz);
 
-      std::vector<double> block(block_elems);
-
-      if (p == 0) {
-        block = local_c;
-
-      } else {
-        MPI_Recv(block.data(), block_elems, MPI_DOUBLE, p, 30, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-      }
-
-      for (int i = 0; i < block_size; ++i) {
-        for (int j = 0; j < block_size; ++j) {
-          int gi = proc_row_p * block_size + i;
-          int gj = proc_col_p * block_size + j;
-
-          result[gi * sz + gj] = block[i * block_size + j];
-        }
-      }
-    }
-
-  } else {
-    MPI_Send(local_c.data(), block_elems, MPI_DOUBLE, 0, 30, MPI_COMM_WORLD);
-  }
   MPI_Bcast(result.data(), static_cast<int>(mat_size), MPI_DOUBLE, 0, MPI_COMM_WORLD);
-
   GetOutput() = result;
-
   return true;
 }
 

@@ -1,7 +1,5 @@
 #pragma once
 
-#include <mpi.h>
-
 #include <cstddef>
 #include <vector>
 
@@ -46,6 +44,12 @@ class ZyazevaSMatrixMultCannonAlgALL : public BaseTask {
                          int step);
   static void AssembleResult(const std::vector<std::vector<double>> &blocks_c, std::vector<double> &res_m,
                              int grid_size, int block_size, size_t sz_t, size_t grid_size_t, size_t block_size_t);
+
+  // extracted to reduce RunImpl cognitive complexity
+  void DistributeBlocks(const std::vector<double> &m1, const std::vector<double> &m2, int grid, int block_size,
+                        int block_elems, int sz, std::vector<double> &local_a, std::vector<double> &local_b) const;
+  void CollectResult(const std::vector<double> &local_c, std::vector<double> &result, int grid, int block_size,
+                     int block_elems, int sz) const;
 };
 
 }  // namespace zyazeva_s_matrix_mult_cannon_alg
