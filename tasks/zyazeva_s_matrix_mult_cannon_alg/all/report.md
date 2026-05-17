@@ -1,94 +1,95 @@
-# Умножение плотных матриц. Элементы типа double. Блочная схема, алгоритм Кэннона. — ALL
+# Умножение матриц: алгоритм Кэннона — ALL (MPI + OpenMP)
 
-- Student: <Зязева Cветлана Александровна>
-- Technology: ALL
-- Variant: <1>
+- Student: Зязева Светлана Александровна
+- Technology: ALL (MPI + OpenMP)
+- Variant: 1
 
 ## 1. Контекст
 
-Гибридная версия реализует двухуровневый параллелизм: процессный уровень (MPI) и внутрипроцессный уровень (OpenMP). Алгоритм Кэннона применяется на уровне MPI-процессов — каждый процесс владеет одним блоком матрицы. Внутри каждого процесса OpenMP дополнительно ускоряет вспомогательные операции (выравнивание, сборку, fallback-умножение). Такая схема масштабируется как по числу узлов (через MPI), так и по числу ядер на каждом узле (через OpenMP).
+Гибридная версия реализует двухуровневый параллелизм: процессный уровень
+(MPI) и внутрипроцессный уровень (OpenMP). Алгоритм Кэннона применяется
+на уровне MPI-процессов — каждый процесс владеет одним блоком матрицы.
+Внутри каждого процесса OpenMP дополнительно ускоряет вспомогательные
+операции. Такая схема масштабируется как по числу узлов (MPI), так и по
+числу ядер на каждом узле (OpenMP).
 
 ## 2. Постановка задачи
 
-**Входные данные** (`InType = std::tuple<size_t, std::vector<double>, std::vector<double>>`):
-
-- `sz` — сторона квадратной матрицы (тип `size_t`);
-- `m1` — матрица A, хранимая построчно в одномерном `std::vector<double>` размером `sz * sz`;
-- `m2` — матрица B, аналогично.
-
-**Выходные данные** (`OutType = std::vector<double>`): результирующая матрица C = A·B, построчно, размер `sz * sz`.
-
-**Ограничения:**
-
-- `sz > 0` — нулевой размер считается недопустимым;
-- `m1.size() == sz * sz` и `m2.size() == sz * sz` — несоответствие размеров блокируется в `ValidationImpl`;
-- элементы — `double`, переполнение не рассматривается.
-
-**Крайние случаи:**
-
-- матрица 1×1 — корректно обрабатывается основным циклом;
-- передача пустых векторов (sz > 0 но size == 0) — отклоняется валидацией.
-
-Конфигурация: `ranks × threads`, где число MPI-рангов (`mpi_size_`) должно быть полным квадратом, а N должен делиться на `√mpi_size_`.
+Аналогична SEQ: произведение квадратных матриц A и B размера N×N.
+Baseline — `seq/report.md`. Конфигурация: `ranks x threads`, где число
+MPI-рангов (`mpi_size_`) должно быть полным квадратом, а N должен
+делиться на `sqrt(mpi_size_)`.
 
 ## 3. Базовый алгоритм
 
 На уровне MPI реализован классический алгоритм Кэннона:
 
-1. Ранг 0 распределяет блоки матриц A и B по процессам (`DistributeBlocks`).
-2. Каждый процесс выполняет начальное смещение своего блока A (по строке) и блока B (по столбцу) с помощью `MPI_Sendrecv_replace`.
-3. Выполняются `grid` шагов: умножение локальных блоков + циклический сдвиг A влево и B вверх через `MPI_Sendrecv_replace`.
-4. Ранг 0 собирает результирующие блоки со всех процессов (`CollectResult`) и рассылает итоговую матрицу (`MPI_Bcast`).
-При невозможности применить Кэннона (число рангов не является полным квадратом, или N не кратен `√mpi_size_`) ранг 0 выполняет `RegularMultiplication` с OpenMP и рассылает результат.
+1. Ранг 0 распределяет блоки A и B по процессам (`DistributeBlocks`).
+2. Каждый процесс выполняет начальное смещение блока A (по строке) и
+   блока B (по столбцу) через `MPI_Sendrecv_replace`.
+3. Выполняются `grid` шагов: умножение локальных блоков и циклический
+   сдвиг A влево, B вверх через `MPI_Sendrecv_replace`.
+4. Ранг 0 собирает результирующие блоки (`CollectResult`) и рассылает
+   итоговую матрицу через `MPI_Bcast`.
+
+При невозможности применить Кэннона ранг 0 выполняет
+`RegularMultiplication` с OpenMP и рассылает результат.
 
 ## 4. Схема распараллеливания
 
 **Процессный уровень (MPI):**
 
-| Операция | Коммуникативный примитив |
-|---|---|
+| Операция | Примитив |
+| --- | --- |
 | Рассылка размера матрицы | `MPI_Bcast` |
-| Рассылка данных матриц | `MPI_Bcast` (полная матрица всем рангам) |
-| Распределение блоков | `MPI_Send` / `MPI_Recv` (ранг 0 → остальные) |
+| Рассылка данных матриц | `MPI_Bcast` |
+| Распределение блоков | `MPI_Send` / `MPI_Recv` |
 | Начальное смещение A | `MPI_Sendrecv_replace` (по строке) |
 | Начальное смещение B | `MPI_Sendrecv_replace` (по столбцу) |
-| Cannon-шаги (сдвиг A) | `MPI_Sendrecv_replace` влево/вправо (tag 20) |
-| Cannon-шаги (сдвиг B) | `MPI_Sendrecv_replace` вверх/вниз (tag 21) |
-| Сбор результата | `MPI_Recv` на ранге 0 / `MPI_Send` с остальных (tag 30) |
+| Cannon-шаги, сдвиг A | `MPI_Sendrecv_replace`, tag 20 |
+| Cannon-шаги, сдвиг B | `MPI_Sendrecv_replace`, tag 21 |
+| Сбор результата | `MPI_Recv` / `MPI_Send`, tag 30 |
 | Рассылка результата | `MPI_Bcast` |
 
 ```cpp
-// File: all/src/ops_all.cpp — Cannon-шаг (сдвиг A и B)
+// File: all/src/ops_all.cpp — Cannon-шаг
 for (int step = 0; step < grid; ++step) {
-  MultiplyBlocks(local_a, local_b, local_c, block_size);  // локальное умножение
- 
-  // сдвиг A влево
-  MPI_Sendrecv_replace(local_a.data(), block_elems, MPI_DOUBLE,
-                       left, 20, right, 20, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  // сдвиг B вверх
-  MPI_Sendrecv_replace(local_b.data(), block_elems, MPI_DOUBLE,
-                       up, 21, down, 21, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  MultiplyBlocks(local_a, local_b, local_c, block_size);
+
+  MPI_Sendrecv_replace(
+      local_a.data(), block_elems, MPI_DOUBLE,
+      left, 20, right, 20,
+      MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+  MPI_Sendrecv_replace(
+      local_b.data(), block_elems, MPI_DOUBLE,
+      up, 21, down, 21,
+      MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 }
 ```
 
-`MPI_Sendrecv_replace` выполняет одновременно отправку и приём в один буфер, что исключает deadlock при кольцевом сдвиге. Неявная синхронизация: все процессы должны вызвать `MPI_Sendrecv_replace` одновременно, поскольку коммуникация точка-точка блокирующая.
+`MPI_Sendrecv_replace` выполняет отправку и приём в один буфер,
+исключая deadlock при кольцевом сдвиге. Все процессы вызывают функцию
+одновременно — неявная синхронизация.
 
 **Внутрипроцессный уровень (OpenMP):**
 
-OpenMP применяется в методах, выполняемых на конкретном ранге:
+OpenMP применяется в:
 
-- `RegularMultiplication` — `#pragma omp parallel for` по строкам (fallback);
-- `AlignBlocks` — `#pragma omp parallel for collapse(2)` по блокам сетки;
-- `CannonStep` — `#pragma omp parallel for collapse(2)` по блокам (используется только в случае CannonAlgALL при OMP-ускорении на ранге);
-- `AssembleResult` — `#pragma omp parallel for collapse(2)` по блокам.
-Атрибуты переменных: везде `default(none)`, все переменные перечислены явно в `shared(...)`.
+- `RegularMultiplication` — `parallel for` по строкам (fallback);
+- `AlignBlocks` — `parallel for collapse(2)` по блокам;
+- `AssembleResult` — `parallel for collapse(2)` по блокам.
 
-**Валидация** выполняется только на ранге 0, результат рассылается через `MPI_Bcast`:
+Везде используется `default(none)` с явным перечислением атрибутов.
+
+**Валидация** выполняется только на ранге 0, результат рассылается:
 
 ```cpp
 // File: all/src/ops_all.cpp — ValidationImpl
 if (rank_ == 0) {
-  valid = (sz > 0 && m1.size() == sz*sz && m2.size() == sz*sz) ? 1 : 0;
+  valid = (sz > 0
+           && m1.size() == sz * sz
+           && m2.size() == sz * sz) ? 1 : 0;
 }
 MPI_Bcast(&valid, 1, MPI_INT, 0, MPI_COMM_WORLD);
 return valid != 0;
@@ -96,71 +97,94 @@ return valid != 0;
 
 Это гарантирует согласованный результат валидации на всех рангах.
 
-**Конфигурация `ranks × threads`:**
-
-Реализация поддерживает произвольное произведение `ranks × threads`. При тестировании runner-ом курса задаются `PPC_NUM_PROC` (число MPI-процессов) и `PPC_NUM_THREADS` (число OMP-потоков на процесс). В данном запуске использовалась конфигурация, при которой оба параметра задавались runner-ом автоматически.
+**Конфигурация `ranks x threads`:** реализация поддерживает произвольное
+произведение. `PPC_NUM_PROC` (число MPI-процессов) и `PPC_NUM_THREADS`
+(число OMP-потоков на процесс) задаются runner-ом курса.
 
 ## 5. Детали реализации
 
 **Файлы:** `all/include/ops_all.hpp`, `all/src/ops_all.cpp`
 
-**`DistributeBlocks`:** ранг 0 вычисляет глобальные координаты блока для каждого процесса, копирует данные во временные буферы `tmp_a`/`tmp_b` и рассылает через `MPI_Send`. Ранг 0 сохраняет свой блок напрямую. Остальные ранги принимают через `MPI_Recv`.
+`DistributeBlocks`: ранг 0 вычисляет координаты блока для каждого
+процесса, копирует данные в буферы `tmp_a`/`tmp_b` и рассылает через
+`MPI_Send`. Ранг 0 сохраняет свой блок напрямую.
 
 ```cpp
 // File: all/src/ops_all.cpp — DistributeBlocks (упрощённо)
 if (rank_ == 0) {
   for (int proc = 0; proc < mpi_size_; ++proc) {
-    // ... заполнение tmp_a, tmp_b для процесса proc ...
-    if (proc == 0) { local_a = tmp_a; local_b = tmp_b; }
-    else {
-      MPI_Send(tmp_a.data(), block_elems, MPI_DOUBLE, proc, 0, MPI_COMM_WORLD);
-      MPI_Send(tmp_b.data(), block_elems, MPI_DOUBLE, proc, 1, MPI_COMM_WORLD);
+    if (proc == 0) {
+      local_a = tmp_a;
+      local_b = tmp_b;
+    } else {
+      MPI_Send(tmp_a.data(), block_elems, MPI_DOUBLE,
+               proc, 0, MPI_COMM_WORLD);
+      MPI_Send(tmp_b.data(), block_elems, MPI_DOUBLE,
+               proc, 1, MPI_COMM_WORLD);
     }
   }
 } else {
-  MPI_Recv(local_a.data(), block_elems, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-  MPI_Recv(local_b.data(), block_elems, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  MPI_Recv(local_a.data(), block_elems, MPI_DOUBLE,
+           0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+  MPI_Recv(local_b.data(), block_elems, MPI_DOUBLE,
+           0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 }
 ```
 
-Замечание: распределение через последовательные `MPI_Send` на ранге 0 является узким местом при большом числе процессов; альтернативой была бы `MPI_Scatterv`.
+Замечание: последовательные `MPI_Send` на ранге 0 — узкое место при
+большом числе процессов; альтернатива — `MPI_Scatterv`.
 
-**`CollectResult`:** симметрична `DistributeBlocks` — ранг 0 принимает блоки (`MPI_Recv`) и записывает в результирующую матрицу.
+`CollectResult` симметрична: ранг 0 принимает блоки через `MPI_Recv` и
+собирает результирующую матрицу.
 
 ## 6. Проверка корректности
 
-ALL-версия проверялась сравнением с SEQ для всех функциональных тестов при числе рангов 1, 4 (2×2 сетка) и при конфигурациях, при которых активируется fallback. Синхронизированная валидация через `MPI_Bcast` гарантирует одинаковое решение всех рангов. Расхождений не наблюдалось. Оба режима производительности запускались и уложились в лимиты.
+ALL-версия сравнивалась с SEQ для всех функциональных тестов при числе
+рангов 1, 4 (сетка 2×2) и при конфигурациях, активирующих fallback.
+Синхронизированная валидация через `MPI_Bcast` гарантирует одинаковое
+решение всех рангов. Расхождений не наблюдалось.
 
 ## 7. Экспериментальная среда
 
 | Параметр | Значение |
-|---|---|
+| --- | --- |
 | CPU | AMD Ryzen 7 8845HS w/ Radeon 780M Graphics |
-| RAM | 32,0 ГБ |
+| RAM | 32 ГБ |
 | OS | Windows 11 Pro |
 | Compiler | g++ / clang++ (Release) |
 | CMake build type | Release |
+| PPC_NUM_PROC | задаётся runner-ом |
+| PPC_NUM_THREADS | задаётся runner-ом |
 
-**Команды сборки и запуска:**
+**Команды запуска:**
 
 ```bash
-# Функциональные тесты
-mpirun --allow-run-as-root -np 4 ./build/bin/ppc_func_tests --gtest_filter=*"zyazeva_s"*
+mpirun --allow-run-as-root -np 4 \
+  ./build/bin/ppc_func_tests \
+  --gtest_filter="*zyazeva_s_matrix_mult_cannon_alg_all*"
 
-# Тесты производительности
-
-mpirun --allow-run-as-root -np 4 ./build/bin/ppc_perf_tests --gtest_filter=*"zyazeva_s"*
+mpirun --allow-run-as-root -np 4 \
+  ./build/bin/ppc_perf_tests \
+  --gtest_filter="*zyazeva_s_matrix_mult_cannon_alg_all*" \
+  --running-type=performance
 ```
 
-## 7. Результаты
+## 8. Результаты
 
 | Режим | Время ALL (с) | Время SEQ (с) | Ускорение |
-|---|---|---|---|
-| pipeline | 0.0720654500 | 0.7128969324 | **9.89×** |
-| task_run | 0.0675401000 | 0.5624887756 | **8.33×** |
+| --- | --- | --- | --- |
+| pipeline | 0.0720654500 | 0.7128969324 | **9.89x** |
+| task_run | 0.0675401000 | 0.5624887756 | **8.33x** |
 
-Гибридная версия демонстрирует наибольшее ускорение среди всех реализаций: ~9.9× в режиме pipeline и ~8.3× в режиме task_run. Это объясняется двухуровневым параллелизмом: MPI распределяет блоки между процессами, OpenMP дополнительно ускоряет вычисления внутри каждого процесса.
+Гибридная версия показывает наибольшее ускорение среди всех реализаций.
+Двухуровневый параллелизм позволяет задействовать несколько процессов и
+все ядра внутри каждого процесса.
 
-## 8. Выводы
+## 9. Выводы
 
-Гибридная MPI+OpenMP реализация обеспечивает наибольшее ускорение за счёт двух уровней параллелизма. MPI позволяет задействовать несколько процессов (потенциально на разных узлах), OpenMP — все ядра внутри каждого процесса. Ограничения: число MPI-рангов должно быть полным квадратом, размер матрицы должен делиться на `√mpi_size_`; при несоблюдении — fallback к `RegularMultiplication` только на ранге 0.
+MPI + OpenMP обеспечивают ускорение ~9.9x / ~8.3x. Ограничения: число
+MPI-рангов должно быть полным квадратом, N — делиться на
+`sqrt(mpi_size_)`; иначе fallback на ранге 0. Узкие места:
+последовательная рассылка блоков через `MPI_Send` и финальный `MPI_Bcast`
+всей матрицы, ограничивающий масштабируемость при больших N и большом
+числе рангов.

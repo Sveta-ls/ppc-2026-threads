@@ -138,8 +138,8 @@ using AlignedVector =
 
 **Файлы:**
 
-* `tbb/include/ops_tbb.hpp`
-* `tbb/src/ops_tbb.cpp`
+- `tbb/include/ops_tbb.hpp`
+- `tbb/src/ops_tbb.cpp`
 
 Весь вспомогательный код
 (инициализация блоков, Cannon-шаг, сборка результата)
