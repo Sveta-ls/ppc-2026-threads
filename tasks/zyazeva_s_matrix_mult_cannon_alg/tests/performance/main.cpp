@@ -82,8 +82,7 @@ namespace {
 
 const auto kAllPerfTasks =
     ppc::util::MakeAllPerfTasks<InType, ZyazevaSMatrixMultCannonAlgSEQ, ZyazevaSMatrixMultCannonAlgOMP,
-                                ZyazevaSMatrixMultCannonAlgTBB, ZyazevaSMatrixMultCannonAlgSTL,
-                                ZyazevaSMatrixMultCannonAlgALL>(PPC_SETTINGS_zyazeva_s_matrix_mult_cannon_alg);
+                                ZyazevaSMatrixMultCannonAlgTBB, ZyazevaSMatrixMultCannonAlgSTL);
 
 const auto kGtestValues = ppc::util::TupleToGTestValues(kAllPerfTasks);
 const auto kPerfTestName = ZyazevaSPerformanceTest::CustomPerfTestName;
